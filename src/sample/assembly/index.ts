@@ -1,106 +1,78 @@
-import { context, logging, storage, PersistentDeque } from "near-sdk-as";
+import { context, u128, RNG, PersistentMap, ContractPromiseBatch } from "near-sdk-as";
 
-/**
- * showYouKnow is a
- * - "view" function (ie. does not alter state)
- * - that takes no parameters
- * - and returns nothing
- *
- * - it has the side effect of appending to the log
- */
-export function showYouKnow(): void {
-  logging.log("showYouKnow() was called");
+enum GameState{
+  Created,
+  Joined,
+  Ended
+}
+@nearBindgen
+export class Roulette{
+  gameId:u32;
+  player:string;
+  guess:boolean;
+  initialAmount: u128;
+  betAmount:u128;
+  winner:string;
+  gameState: GameState
+
+  constructor(){
+
+    const rng= new RNG<u32>(1,u32.MAX_VALUE);
+    const roll = rng.next()
+    this.gameId = roll;
+    this.player="None";
+    this.betAmount=u128.Zero;
+    this.guess=false;
+    this.initialAmount=context.attachedDeposit;
+    this.gameState=GameState.Created;
+    this.winner= context.sender;
+  }
+}
+const gameMap= new PersistentMap<u32, Roulette>("gr");
+
+export function CreateGame() : u32{
+  const roulette = new Roulette();
+  //games.push(roulette);
+  gameMap.set(roulette.gameId,roulette);
+  return  roulette.gameId;
 }
 
-/**
- * same as above but returns true for better UX
- * @returns bool that is always true
- */
-export function showYouKnow2(): bool {
-  logging.log("showYouKnow2() was called");
-  return true
-}
+export function JoinGame(_gameId:u32,_guess:boolean) : boolean{
 
-/**
- * sayHello is a
- * - "view" function (ie. does not alter state)
- * - that takes no parameters
- * - and returns a string
- *
- * - it has the side effect of appending to the log
- */
-export function sayHello(): string {
-  logging.log("sayHello() was called");
-
-  return "Hello!";
-}
-
-/**
- * sayMyName is a
- * - "change" function (although it does NOT alter state, it DOES read from context)
- * - that takes no parameters
- * - and returns a string
- *
- * - it has the side effect of appending to the log
- */
-export function sayMyName(): string {
-  logging.log("sayMyName() was called");
-
-  return "Hello, " + context.sender + "!";
-}
-
-/**
- * saveMyName is a
- * - "change" function (ie. alters state)
- * - that takes no parameters
- * - saves the sender account name to contract state
- * - and returns nothing
- *
- * - it has the side effect of appending to the log
- */
-export function saveMyName(): void {
-  logging.log("saveMyName() was called");
-
-  storage.setString("last_sender", context.sender);
-}
-
-/**
- * saveMyMessage is a
- * - "change" function (ie. alters state)
- * - that takes no parameters
- * - saves the sender account name and message to contract state
- * - and returns nothing
- *
- * - it has the side effect of appending to the log
- */
-export function saveMyMessage(message: string): bool {
-  logging.log("saveMyMessage() was called");
-
-  assert(message.length > 0, "Message can not be blank.");
-  const messages = new PersistentDeque<string>("messages");
-  messages.pushFront(context.sender + " says " + message);
-
+  if(context.attachedDeposit == u128.Zero){
+    return false;
+  }
+  const game = gameMap.getSome(_gameId);
+  game.player= context.sender;
+  game.guess= _guess;
+  game.gameState= GameState.Joined;
+  game.betAmount = context.attachedDeposit;
+  gameMap.set(_gameId, game);
   return true;
 }
 
-/**
- * getAllMessages is a
- * - "change" function (ie. alters state)
- * - that takes no parameters
- * - reads and removes all recorded messages from contract state (this can become expensive!)
- * - and returns an array of messages if any are found, otherwise empty array
- *
- * - it has the side effect of appending to the log
- */
-export function getAllMessages(): Array<string> {
-  logging.log("getAllMessages() was called");
+export function endGame(_gameId:u32) : string{
+  const game = gameMap.getSome(_gameId);
+  const rng = new RNG<u32>(1,36);
+  const Winning_num = rng.next();
 
-  const messages = new PersistentDeque<string>("messages");
-  let results = new Array<string>();
+  if(Winning_num%2 == 1){
 
-  while (!messages.isEmpty) {
-    results.push(messages.popBack());
+    if(game.guess== false){
+      game.winner = game.player;
+    }
+
   }
+  else{
+    if(game.guess == true){
+      game.winner = game.player;
+    }
+  }
+  game.gameState= GameState.Ended;
+  gameMap.set(_gameId,game);
 
-  return results;
+  const to_benificiary = ContractPromiseBatch.create(game.winner);
+  to_benificiary.transfer(u128.add(game.betAmount,game.initialAmount));
+  return game.winner;
+
 }
